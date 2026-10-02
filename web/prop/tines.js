@@ -136,6 +136,42 @@ export function tineStepFor(density) {
 }
 
 /**
+ * Where a tine meets the part: the distance along its bite heading (dx, dy) from the
+ * seed (x, y) at which the part's solid begins, at the tine's own layer sample `zs`
+ * (its mid-height, where a slicer cuts it), plus TRIM_KISS so the two still touch.
+ * A tine used to run the full `tineBite` on into the part; a slicer unions that buried
+ * stretch away (the site's 3MF and STL put part and supports in one object), so the
+ * print is the same, and the tine now ends neatly at the surface instead of poking
+ * through it -- what a separate-object (kiss) export needs. Falls back to the full
+ * bite wherever the surface isn't bracketed at `zs` (the old shape, never shorter
+ * than it should be), and never ends nearer the seed than TRIM_MIN. Across the width, the
+ * farthest of the centre line and both side edges.
+ */
+const TRIM_KISS = 0.01, TRIM_MIN = 0.05;
+function trimTineEnd(topo, rot, offset, x, y, dx, dy, zs) {
+  // Measured along the centre line AND both side edges, keeping the farthest: on a
+  // curved or angled face (torus, sphere, tube) the surface meets the tine's end at a
+  // slant, and a centre-only cut left one corner short of the part (29 of 534 tines
+  // across the real parts lost contact area). The farthest edge reaches the part
+  // everywhere across the tine's width; the rest of that end is buried, as before.
+  const half = PROP.tineW / 2;
+  let end = 0;
+  for (const s of [0, -half, half]) {
+    const px = x - dy * s, py = y + dx * s;      // across = z x along, as emitTines
+    const inside = (d) => insidePart(topo, rot, offset, px + dx * d, py + dy * d, zs);
+    let lo = 0, hi = PROP.tineBite;
+    if (!inside(hi)) return PROP.tineBite;      // no solid within reach here: the old shape
+    if (inside(lo)) { end = Math.max(end, TRIM_MIN); continue; }   // already over the seed
+    for (let i = 0; i < 12; i++) {              // ~0.0001 mm on a 0.5 reach
+      const mid = (lo + hi) / 2;
+      if (inside(mid)) hi = mid; else lo = mid;
+    }
+    end = Math.max(end, hi + TRIM_KISS);
+  }
+  return Math.min(PROP.tineBite, Math.max(TRIM_MIN, end));
+}
+
+/**
  * Lay a comb of grip tines along a placed wall's top, biting a hair into the
  * part, and return how many actually landed.
  *
@@ -155,30 +191,6 @@ export function tineStepFor(density) {
  * `grip`, if given ({ z }), gets the lowest tine bottom: the wall's grip height.
  * Not the lowest emitted vertex -- a wall step under a tine sits lower.
  */
-/**
- * Where a tine meets the part: the distance along its bite heading (dx, dy) from the
- * seed (x, y) at which the part's solid begins, at the tine's own layer sample `zs`
- * (its mid-height, where a slicer cuts it), plus TRIM_KISS so the two still touch.
- * A tine used to run the full `tineBite` on into the part; a slicer unions that buried
- * stretch away (the site's 3MF and STL put part and supports in one object), so the
- * print is the same, and the tine now ends neatly at the surface instead of poking
- * through it -- what a separate-object (kiss) export needs. Falls back to the full
- * bite wherever the surface isn't bracketed at `zs` (the old shape, never shorter
- * than it should be), and never ends nearer the seed than TRIM_MIN.
- */
-const TRIM_KISS = 0.01, TRIM_MIN = 0.05;
-function trimTineEnd(topo, rot, offset, x, y, dx, dy, zs) {
-  const inside = (d) => insidePart(topo, rot, offset, x + dx * d, y + dy * d, zs);
-  let lo = 0, hi = PROP.tineBite;
-  if (!inside(hi)) return PROP.tineBite;      // no solid within reach at this layer
-  if (inside(lo)) return TRIM_MIN;            // the part already overhangs the seed here
-  for (let i = 0; i < 12; i++) {              // ~0.0001 mm on a 0.5 reach
-    const mid = (lo + hi) / 2;
-    if (inside(mid)) hi = mid; else lo = mid;
-  }
-  return Math.min(PROP.tineBite, Math.max(TRIM_MIN, hi + TRIM_KISS));
-}
-
 // How far a wall step (below) stays inside its tine's footprint: enough that no
 // vertex coincides, far under anything a slicer resolves.
 const STEP_INSET = 0.01;
