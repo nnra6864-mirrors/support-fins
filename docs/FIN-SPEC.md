@@ -72,6 +72,12 @@ welts.
   66% of contact-line stations take a tine ≤ 1.5 mm, and 13/20 overhang regions have a
   vertical face tall enough to stand a fin against. **That ~65% ceiling is why manual fin
   placement is a core feature, not a fallback.**
+- **Tines end at the part's surface** (2026-10-02). A tine is placed only where its full
+  `tineBite` (0.5) reach lands in the part, but it's built only as far as the part's
+  surface at its own layer, +0.01 mm so the two still overlap (`trimTineEnd`). A slicer
+  unions part and supports in one object, so the buried stretch never printed: the
+  sliced layers are identical (bite coupon, main vs trimmed: 0.00000 mm2 apart). What
+  welds is the part's next layer printing onto the tine (local issue 027).
 - **Scale-aware profile.** The prototype's foot/chamfer/tip are fixed, which degenerates
   into a 14 mm splayed sheet when the overhang sits low. Foot width must scale with wall
   height.
