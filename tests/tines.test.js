@@ -85,26 +85,33 @@ Deno.test('emitTines: on a wall along the level CONTOUR, teeth still bite INTO t
     if (z !== null) line.push([x, 0, z]);
   }
   const out = [];
-  const n = emitTines(line, null, topo, rot, offset, out);
+  const cap = [];                          // each tine's seed + bite heading (the test seam)
+  globalThis.__TINECAP = cap;
+  let n;
+  try { n = emitTines(line, null, topo, rot, offset, out); } finally { delete globalThis.__TINECAP; }
   // The old run-aligned bite produced ZERO tines here: probing +-run heads along
   // the contour (constant height), never into the material, so every station drops
   // out. A part-derived bite grips the sloped face.
   assert(n >= 3, `contour wall produced too few tines: ${n} (old bug: 0 -- bit along the run)`);
   // the bite runs ACROSS the wall (into the slope, in Y), not ALONG it (X), and each
-  // tine reaches the face: tines end AT the part's surface now (trimTineEnd), so the
-  // proof is that one end of each, at its own mid-layer, just touches solid and the
-  // tine doesn't run on past it -- a tine lying flat along the contour ends in the gap.
+  // tine KISSES the face: tines end at the part's surface (kissEnds), their end leaning
+  // with the slope. So every corner of a tine's far end touches solid, and 0.03 mm back
+  // toward the wall is open -- no part of the tine runs on into the part, and a tine
+  // lying flat along the contour would end in the gap instead.
   const { tines } = tineBoxes(out);
   assert(tines.length === n, `${tines.length} tine boxes for ${n} tines`);
-  for (const t of tines) {
-    const cx = (t.lo[0] + t.hi[0]) / 2, zm = (t.lo[2] + t.hi[2]) / 2;
+  for (const [k, t] of tines.entries()) {
     assert(t.hi[0] - t.lo[0] < 0.6, `a tine runs along the contour (x ${t.lo[0].toFixed(2)}..${t.hi[0].toFixed(2)})`);
-    const at = (y) => insidePart(topo, rot, offset, cx, y, zm);
-    // the tip is whichever end touches; 0.05 back from it is open gap
-    const tip = at(t.lo[1] + 0.005) ? [t.lo[1] + 0.005, t.lo[1] + 0.05]
-      : at(t.hi[1] - 0.005) ? [t.hi[1] - 0.005, t.hi[1] - 0.05] : null;
-    assert(tip, `tine at x ${cx.toFixed(1)} ends short of the face`);
-    assert(!at(tip[1]), `tine at x ${cx.toFixed(1)} runs on into the part`);
+    const { x, y, biteX, biteY } = cap[k];
+    assert(Math.abs(biteY) > 0.99, `tine ${k} bites along ${biteX.toFixed(2)},${biteY.toFixed(2)}, not into the slope`);
+    const along = (v) => (v[0] - x) * biteX + (v[1] - y) * biteY;
+    const far = t.verts.filter((v) => along(v) > -prop.PROP.tineOverlap + 1e-6);
+    assert(far.length > 0, `tine ${k} has no far end`);
+    for (const v of far) {
+      assert(insidePart(topo, rot, offset, v[0], v[1], v[2]), `tine ${k} corner ${v.map((c) => c.toFixed(2))} ends short of the face`);
+      assert(!insidePart(topo, rot, offset, v[0] - biteX * 0.03, v[1] - biteY * 0.03, v[2]),
+             `tine ${k} corner ${v.map((c) => c.toFixed(2))} runs on into the part`);
+    }
   }
 });
 

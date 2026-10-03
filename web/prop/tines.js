@@ -136,39 +136,72 @@ export function tineStepFor(density) {
 }
 
 /**
- * Where a tine meets the part: the distance along its bite heading (dx, dy) from the
- * seed (x, y) at which the part's solid begins, at the tine's own layer sample `zs`
- * (its mid-height, where a slicer cuts it), plus TRIM_KISS so the two still touch.
- * A tine used to run the full `tineBite` on into the part; a slicer unions that buried
- * stretch away (the site's 3MF and STL put part and supports in one object), so the
- * print is the same, and the tine now ends neatly at the surface instead of poking
- * through it -- what a separate-object (kiss) export needs. Falls back to the full
- * bite wherever the surface isn't bracketed at `zs` (the old shape, never shorter
- * than it should be), and never ends nearer the seed than TRIM_MIN. Across the width, the
- * farthest of the centre line and both side edges.
+ * Where a tine meets the part, so it can KISS the surface instead of running on into
+ * it: for each side edge of the tine (across = +-tineW/2) at its bottom and its top
+ * (`zb`, `zt`, a hair inside the layer), the distance along the bite heading (dx, dy)
+ * at which the part's solid begins, plus TRIM_KISS so the two still overlap (flush
+ * faces weld into one non-manifold body in Fusion). emitTines builds the tine's end
+ * through those four corners, so on a sloped or curved underside the end leans with
+ * the surface and no part of the tine sits inside the part.
+ *
+ * A tine used to run the full `tineBite` (0.5) on into the part. A slicer unions that
+ * buried stretch away (the site's 3MF and STL put part and supports in one object),
+ * so the print is the same; the tine just stops poking through, and is ready for an
+ * export that keeps the two apart (local issue 027). Placement is unchanged: the
+ * tine still has to reach solid within `tineBite`.
+ *
+ * Per corner: no solid within reach on that line and height -> the full bite (the
+ * old shape); solid already back over the wall end -> TRIM_MIN past it.
+ * Returns { bot: [left, right], top: [left, right] }.
  */
-const TRIM_KISS = 0.01, TRIM_MIN = 0.05;
-function trimTineEnd(topo, rot, offset, x, y, dx, dy, zs) {
-  // Measured along the centre line AND both side edges, keeping the farthest: on a
-  // curved or angled face (torus, sphere, tube) the surface meets the tine's end at a
-  // slant, and a centre-only cut left one corner short of the part (29 of 534 tines
-  // across the real parts lost contact area). The farthest edge reaches the part
-  // everywhere across the tine's width; the rest of that end is buried, as before.
-  const half = PROP.tineW / 2;
-  let end = 0;
-  for (const s of [0, -half, half]) {
+const TRIM_KISS = 0.01, TRIM_MIN = 0.05, TRIM_Z = 0.01;
+function kissEnds(topo, rot, offset, x, y, dx, dy, zb, zt) {
+  // The end may lean out past `tineBite` at the bottom: on a 40 deg underside the
+  // surface there is ~0.24 mm farther than at the top, and capping it at the bite cut
+  // the tine short of the surface at mid-layer, where the slicer reads it.
+  const half = PROP.tineW / 2, lo0 = -PROP.tineOverlap + TRIM_MIN, far = 2 * PROP.tineBite;
+  const reach = (s, z) => {
     const px = x - dy * s, py = y + dx * s;      // across = z x along, as emitTines
-    const inside = (d) => insidePart(topo, rot, offset, px + dx * d, py + dy * d, zs);
-    let lo = 0, hi = PROP.tineBite;
-    if (!inside(hi)) return PROP.tineBite;      // no solid within reach here: the old shape
-    if (inside(lo)) { end = Math.max(end, TRIM_MIN); continue; }   // already over the seed
-    for (let i = 0; i < 12; i++) {              // ~0.0001 mm on a 0.5 reach
+    const inside = (d) => insidePart(topo, rot, offset, px + dx * d, py + dy * d, z);
+    // far probe first; a part thinner than that can put it in air past the part, so
+    // fall back to the bite's own reach before giving up
+    let lo = lo0, hi = inside(far) ? far : inside(PROP.tineBite) ? PROP.tineBite : null;
+    if (hi === null) return PROP.tineBite;      // no solid within reach: the old length
+    if (inside(lo)) return lo0;                 // the part already reaches back over the wall
+    for (let i = 0; i < 14; i++) {              // ~0.0001 mm on a 1.25 span
       const mid = (lo + hi) / 2;
       if (inside(mid)) hi = mid; else lo = mid;
     }
-    end = Math.max(end, hi + TRIM_KISS);
+    return hi + TRIM_KISS;
+  };
+  // measured a hair inside the layer (a part face can sit exactly on a layer line),
+  // then carried out to the tine's real bottom and top along the same lean
+  const k = TRIM_Z / (zt - zb - 2 * TRIM_Z);
+  const side = (s) => {
+    const b = reach(s, zb + TRIM_Z), t = reach(s, zt - TRIM_Z);
+    const clamp = (e) => Math.min(far, Math.max(lo0, e));
+    return [clamp(b + (b - t) * k), clamp(t + (t - b) * k)];
+  };
+  const [l, r] = [side(-half), side(half)];
+  return { bot: [l[0], r[0]], top: [l[1], r[1]] };
+}
+
+/** boxExtrude with a different (same-size) outline at the top: a tine whose end leans
+ *  with the part's surface. Same vertex order and faces as boxExtrude, so a tine is
+ *  still one 36-vertex block (tests/_util.js tineBoxes). */
+function loftExtrude(polyLo, polyHi, lo, hi, P, out) {
+  const n = polyLo.length;
+  const vlo = polyLo.map(([a, b]) => P(a, b, lo));
+  const vhi = polyHi.map(([a, b]) => P(a, b, hi));
+  for (let i = 0; i < n; i++) {
+    const j = (i + 1) % n;
+    out.push(vlo[i], vlo[j], vhi[j]);
+    out.push(vlo[i], vhi[j], vhi[i]);
   }
-  return Math.min(PROP.tineBite, Math.max(TRIM_MIN, end));
+  for (let i = 1; i < n - 1; i++) {
+    out.push(vhi[0], vhi[i], vhi[i + 1]);
+    out.push(vlo[0], vlo[i + 1], vlo[i]);
+  }
 }
 
 /**
@@ -290,14 +323,13 @@ export function emitTines(line, tris, topo, rot, offset, out, stepArg = PROP.tin
     const base = [x, y, 0];
     const P = (a, b, c) => [base[0] + dirx * a + ax * b,
                             base[1] + diry * a + ay * b, c];
-    // rectangle in (along, across): from -overlap (into the wall) to where the tine
-    // meets the part (trimTineEnd), not on into it
-    const end = trimTineEnd(topo, rot, offset, x, y, dirx, diry, tineBot + tineH / 2);
-    const poly = [
-      [-PROP.tineOverlap, -half], [end, -half],
-      [end, half], [-PROP.tineOverlap, half],
-    ];
-    boxExtrude(poly, tineBot, tineTop, P, out);
+    // quad in (along, across): from -overlap (into the wall) to where the tine meets
+    // the part, its end leaning with the surface between bottom and top (kissEnds)
+    const e = kissEnds(topo, rot, offset, x, y, dirx, diry, tineBot, tineTop);
+    const ov = -PROP.tineOverlap;
+    loftExtrude([[ov, -half], [e.bot[0], -half], [e.bot[1], half], [ov, half]],
+                [[ov, -half], [e.top[0], -half], [e.top[1], half], [ov, half]],
+                tineBot, tineTop, P, out);
     if (grip && tineBot < grip.z) grip.z = tineBot;
     // WALL STEP. The tine is snapped to the part's layer, the wall top isn't, so
     // the tine can start above the wall: up to half a layer when the gap is one
