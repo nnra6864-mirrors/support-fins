@@ -19,6 +19,7 @@ import { readSTL, MODELS, analyze, fins, rotX, rotY, assert, assertClose, block 
 import { buildTopology, IDENTITY3 } from '../../../web/overhangs.js';
 import { readThreeMF } from '../../../web/threemf.js';
 import { writeBinarySTL } from '../../../web/stl.js';
+import { fileURLToPath } from 'node:url';
 
 const LBRACKET = Deno.readFileSync(`${MODELS}lbracket.stl`);
 
@@ -251,7 +252,7 @@ Deno.test('cli: the summary line says what was left unsupported, word for word w
     py = new Deno.Command('python3', {
       args: ['-c', 'import sys, json; sys.path.insert(0, sys.argv[1]); from supportfins_host import host_report; '
         + 'print(json.dumps([host_report(s) for s in json.loads(sys.argv[2])]))',
-      new URL('../../shared/py/', import.meta.url).pathname, JSON.stringify(samples)],
+      fileURLToPath(new URL('../../shared/py/', import.meta.url)), JSON.stringify(samples)],
       stdout: 'piped', stderr: 'piped',
     }).outputSync();
   } catch { return; }   // no python3 here: the JS line is still pinned above
